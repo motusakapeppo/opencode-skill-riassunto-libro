@@ -8,6 +8,7 @@ from loguru import logger
 from scripts.config import Settings
 from scripts.models import ProofreadResult, PipelineResult
 from scripts.llm_engine import call_ollama
+from scripts.style import analyse_style
 
 PROOFREAD_PROMPT = """Verifica la qualità del seguente saggio riassuntivo.
 
@@ -49,8 +50,7 @@ def proofread(essay: str, settings: Settings) -> ProofreadResult:
     )
     
     if not content:
-        return ProofreadResult(score=100)
-    
+        return ProofreadResult(score=100)    
     score_match = re.search(r"PUNTEGGIO_TOTALE:\s*(\d+)", content)
     score = int(score_match.group(1)) if score_match else 100
     
@@ -64,23 +64,58 @@ def proofread(essay: str, settings: Settings) -> ProofreadResult:
 
 
 def auto_critique(result: PipelineResult, settings: Settings) -> ProofreadResult:
-    """Full auto-critique: proofread + check entity coverage + check structure.
-    
-    Returns ProofreadResult with combined score.
+    """Full auto-critique: LLM proofread + deterministic style gate + coverage.
+
+    The style gate is measured, not judged by the model: a document that is
+    structurally an outline cannot score above 40, whatever the prose says.
     """
     proof = proofread(result.essay, settings)
-    
+
+    style = getattr(settings, "style", "prose")
+    stats = analyse_style(result.essay)
+    proof.style = stats.as_dict()
+
     total_entities = (len(result.entities.persone) +
                       len(result.entities.date) +
                       len(result.entities.opere))
-    
+
     has_sections = all(marker in result.essay for marker in
                        ["### Da Ricordare", "### Scheda Riassuntiva", "### Domande di Verifica"])
-    
+
     if not has_sections:
         proof.issues.append("Mancano sezioni obbligatorie (Da Ricordare, Scheda, Domande)")
-    
+
     if total_entities < 5:
         proof.issues.append(f"Poche entità estratte ({total_entities})")
-    
+
+    if style == "prose":
+        if stats.is_bullet_dump():
+            proof.must_rewrite = True
+            proof.score = min(proof.score, 40)
+            proof.issues.append(
+                "Bullet dump: "
+                f"{stats.bullet_lines}/{stats.lines} righe di elenco "
+                f"({stats.bullet_ratio:.1%}), {stats.lists} elenchi "
+                f"({stats.lists_per_1000_words:.1f} ogni 1000 parole). "
+                "Serve una riscrittura in prosa (max 40/100)."
+            )
+        if stats.label_headings:
+            proof.score = min(proof.score, 70)
+            proof.issues.append(
+                f"{stats.label_headings} titoli-etichetta da eliminare "
+                "(### Introduzione, ### Concetti chiave, ### Esempi)"
+            )
+        if stats.bibliographic > 3:
+            proof.score = min(proof.score, 75)
+            proof.issues.append(
+                f"{stats.bibliographic} metadati bibliografici trascritti "
+                "(ISSN/DOI/ISBN/pagine): i contenuti vanno raccontati, non citati"
+            )
+        if stats.paragraphs and stats.short_paragraphs > max(3, stats.paragraphs // 5):
+            proof.score = min(proof.score, 80)
+            proof.issues.append(
+                f"{stats.short_paragraphs} paragrafi sotto le 25 parole: "
+                "il contratto chiede 3-6 frasi per paragrafo"
+            )
+
     return proof

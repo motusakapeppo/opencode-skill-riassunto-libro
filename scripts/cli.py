@@ -73,6 +73,30 @@ def main():
         print(f"VISION_REQUIRED:{result.vision_manifest} "
               f"pages={','.join(str(p) for p in result.vision_pages)}")
 
+    # PDF rendering — the style gate lives here: prose is enforced before typesetting
+    if not args.no_pdf:
+        from scripts.design_system import detect_theme, generate_design
+        from scripts.extractor import estrai_metadati
+        from scripts.renderer import render_pdf
+        from scripts.style import StyleViolation
+
+        out_dir = Path(settings.output_dir)
+        if not out_dir.is_absolute():
+            out_dir = Path(args.file).parent / out_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        titolo, autore = estrai_metadati(args.file)
+        theme = detect_theme(Path(args.file).stem, result.essay)
+        design = generate_design(theme, result.essay)
+        pdf_path = out_dir / f"Riassunto_{Path(args.file).stem}.pdf"
+
+        try:
+            render_pdf(result.essay, str(pdf_path), design, settings, titolo, autore)
+            print(f"PDF:{pdf_path}")
+        except StyleViolation as exc:
+            print(f"STYLE_VIOLATION:{exc}")
+            raise SystemExit(2)
+
     # Stats
     if args.stats:
         print(f"\nStats: {result.total_chunks} chunks, "

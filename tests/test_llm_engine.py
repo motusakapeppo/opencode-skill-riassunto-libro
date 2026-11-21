@@ -14,6 +14,7 @@ from scripts.llm_engine import (
     reduce_results,
 )
 from scripts.models import EntitySet, MapResult
+from scripts.config import Settings
 
 
 # ─────────────────────────────────────────────
@@ -303,12 +304,51 @@ class TestReduceResults:
         essay = reduce_results(results)
         assert "[Fonte: Blocco 1]" in essay, "Citations must be preserved!"
 
-    def test_adds_heading_if_missing(self):
+    def test_prose_mode_adds_no_synthetic_heading(self):
+        """Prose mode must not inject "### Sezione": repeated label headings are
+        exactly what turned the essay into an outline."""
         results = [
             MapResult(chunk_id=0, summary="Testo senza heading.", entities=EntitySet(), token_count=5),
         ]
-        essay = reduce_results(results)
+        essay = reduce_results(results, Settings(style="prose"))
+        assert "### Sezione" not in essay
+        assert "[[BLOCCO 1]]" in essay
+
+    def test_notes_mode_keeps_heading(self):
+        results = [
+            MapResult(chunk_id=0, summary="Testo senza heading.", entities=EntitySet(), token_count=5),
+        ]
+        essay = reduce_results(results, Settings(style="notes"))
         assert "### Sezione" in essay
+
+    def test_strips_per_chunk_extras(self):
+        """Sections emitted by a chunk must not reach the merged essay."""
+        results = [
+            MapResult(
+                chunk_id=0,
+                summary=(
+                    "Prosa sul mercato dell'opera. [Fonte: Blocco 1]\n\n"
+                    "### Da Ricordare\n**Teatro** — spazio pagante.\n\n"
+                    "### Glossario\n**Libretto** — testo dell'opera."
+                ),
+                entities=EntitySet(),
+                token_count=20,
+            ),
+        ]
+        essay = reduce_results(results, Settings(style="prose"))
+        assert "Prosa sul mercato dell'opera." in essay
+        assert "Da Ricordare" not in essay
+        assert "Glossario" not in essay
+        assert "[Fonte: Blocco 1]" in essay
+
+    def test_merges_repeated_headings(self):
+        results = [
+            MapResult(chunk_id=0, summary="### Venezia\nPrima parte.", entities=EntitySet(), token_count=5),
+            MapResult(chunk_id=1, summary="### Venezia\nSeconda parte.", entities=EntitySet(), token_count=5),
+        ]
+        essay = reduce_results(results, Settings(style="prose"))
+        assert essay.count("### Venezia") == 1
+        assert "Prima parte." in essay and "Seconda parte." in essay
 
     def test_deduplicates(self):
         results = [

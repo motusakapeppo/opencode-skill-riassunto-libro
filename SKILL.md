@@ -1,6 +1,6 @@
 ---
 name: riassunto-libro
-description: "Converte libri e documenti (PDF, EPUB, DOCX, MOBI, TXT, MD, HTML, RTF) in un saggio discorsivo .pdf per studio universitario. Architettura modulare a 7 componenti: Extractor, Chunker, LLM Engine, Proofreader, Renderer, Design System, Config/CLI. Adaptive prompts per tipo di contenuto, compressione a densità variabile, chunking semantico, proofreading automatico. Linguaggio semplice, zero elenchi, zero asterischi, citazioni fonte."
+description: "Converte libri e documenti (PDF, EPUB, DOCX, MOBI, TXT, MD, HTML, RTF) in un saggio discorsivo .pdf per studio universitario, oppure in appunti strutturati. Architettura modulare: Extractor con routing OCR per pagina e lane vision, Chunker semantico, LLM Engine (map in prosa + sintesi finale), Proofreader con gate di stile misurato, Renderer, Design System, Config/CLI. Due modalita: saggio (solo prosa) e appunti (elenchi ammessi)."
 triggers: riassumi, riassunto, fai un riassunto, riassunto libro, riassunto pdf, summary, summarize book, studiare, prepara esame, sintesi libro, book summary, mega skill, mega-skill
 argument-hint: <path-to-document> [lingua=it|en]
 ---
@@ -35,7 +35,9 @@ DOCUMENTO (PDF/EPUB/DOCX/MOBI/TXT/MD/HTML/RTF)
   │     ├─ Split oversized: sezioni → paragrafi → frasi
   │     └─ Merge chunk piccoli (< 800 token)
   │
-  ├─ [3/7] LLM ENGINE (L'Equalizzatore) — Map-Reduce adattivo
+  ├─ [3/7] LLM ENGINE (L'Equalizzatore) — Map in prosa + sintesi finale
+  │     ├─ MAP: ogni chunk produce SOLO prosa (paragrafi 3-6 frasi, connettivi)
+  │     ├─ MAP: vietate sezioni finali, titoli-etichetta e metadati bibliografici
   │     ├─ Adaptive prompts: rileva tipo contenuto (storia/scienza/arte/filosofia/letteratura)
   │     ├─ Grounding: zero allucinazioni, solo dal testo fornito
   │     ├─ Filtro rumore: scarta indici/bibliografie ([SKIP], [NESSUN CONTENUTO UTILE])
@@ -43,13 +45,19 @@ DOCUMENTO (PDF/EPUB/DOCX/MOBI/TXT/MD/HTML/RTF)
   │     ├─ Checkpoint incrementale: riprende da crash
   │     ├─ Feedback loop: verifica completezza vs originale
   │     ├─ Compressione a densità variabile (10-40% in base a densità informativa)
+  │     ├─ MERGE: toglie le sezioni ripetute in coda a ogni chunk, fonde i titoli doppi,
+  │     │         marca i confini con [[BLOCCO n]]
+  │     ├─ REDUCE: un solo passaggio di sintesi genera il saggio e, una volta sola,
+  │     │          Da Ricordare / Cronologia / Glossario / Opere Citati / Scheda / Domande
+  │     ├─ Retry contenuto vuoto: max_tokens dedicato (16000), non num_ctx
   │     ├─ Dedup a 3 livelli: paragrafo, frase, parola
-  │     ├─ Boldify intelligente: entità in grassetto (prima occorrenza per paragrafo)
-  │     ├─ Scheda Riassuntiva: 15 concetti chiave in tabella
-  │     └─ Domande d'Esame: 5 probabili domande del professore
+  │     └─ Boldify intelligente: entità in grassetto (prima occorrenza per paragrafo)
   │
   ├─ [4/7] PROOFREADER (Il Revisore) — Controllo qualità
   │     ├─ Punteggio 0-100 su 5 criteri (coerenza, completezza, chiarezza, errori, struttura)
+  │     ├─ Gate di stile misurato: % righe-elenco, elenchi ogni 1000 parole,
+  │     │   titoli-etichetta, metadati bibliografici, paragrafi troppo corti
+  │     ├─ Bullet dump → score max 40 + must_rewrite (poi una riscrittura, una sola)
   │     ├─ Verifica sezioni obbligatorie (Da Ricordare, Scheda, Domande)
   │     ├─ Controllo copertura entità estratte
   │     └─ Segnalazione issue e suggerimenti
@@ -62,12 +70,13 @@ DOCUMENTO (PDF/EPUB/DOCX/MOBI/TXT/MD/HTML/RTF)
   │
   ├─ [6/7] RENDERER (L'Impaginatore) — Export .pdf via Playwright
   │     ├─ HTML+CSS → PDF via Chromium (Playwright)
+  │     ├─ Gate di stile: in modalità prose converte gli elenchi minori in paragrafi
+  │     │   e RIFIUTA di stampare un bullet dump (StyleViolation, exit code 2)
   │     ├─ Copertina con metadati (titolo + autore)
   │     ├─ Heading nativi → indice navigabile PDF
   │     ├─ Tabella concetti (Termine / Definizione)
   │     ├─ Domande in grassetto
   │     ├─ Citazioni in grigio corsivo [Fonte: Blocco N]
-  │     ├─ Zero asterischi, zero elenchi
   │     └─ Drop cap con initial-letter, dedup multi-livello
   │
   └─ [7/7] CONFIG/CLI (Il Direttore) — Configurazione e entry point
@@ -83,6 +92,10 @@ DOCUMENTO (PDF/EPUB/DOCX/MOBI/TXT/MD/HTML/RTF)
 - `Riassunto_NomeLibro.pdf` — saggio discorsivo con copertina, indice navigabile, scheda concetti, domande esame, tema adattivo automatico (6 palette rilevate da filename/contenuto)
 - `Riassunto_NomeLibro_entities.json` — entità estratte (persone, date, opere)
 
+Se il testo prodotto è un elenco invece di un saggio, il renderer si rifiuta di
+stampare e la CLI esce con `STYLE_VIOLATION:...` (exit code 2): meglio un errore
+visibile che un PDF illeggibile.
+
 ## Come usare
 
 ```
@@ -92,6 +105,25 @@ riassumi D:\Downloads\liber.pdf en      ← se il libro e in inglese
 ```
 
 Oppure allega il file e scrivi "riassumi questo libro"
+
+## Due modalità
+
+| | `style: prose` (default) | `style: notes` |
+|---|---|---|
+| A cosa serve | saggio da studiare, da leggere di fila | appunti per ripasso rapido |
+| Forma | solo prosa, paragrafi di 3-6 frasi | elenchi ammessi e resi come elenchi |
+| Sezioni finali | generate una volta, dopo il saggio | idem |
+| Se il testo esce a elenchi | proofreader: score max 40 + `must_rewrite`; renderer: rifiuta il PDF | nessun gate |
+
+```
+python -m scripts.cli libro.pdf it                 # saggio (prose)
+RIASSUNTO_STYLE=notes python -m scripts.cli libro.pdf   # appunti
+```
+
+Il contratto di stile è scritto nel prompt come vincoli verificabili (paragrafi
+di 3-6 frasi, connettivi tra paragrafi, niente titoli-etichetta, niente ISSN/DOI/
+numeri di pagina) e verificato da `scripts/style.py` sulle metriche del testo:
+non dipende da quanto il modello "capisce" l'aggettivo "discorsivo".
 
 ## Requisiti
 
@@ -147,6 +179,12 @@ ollama_host: "http://127.0.0.1:11434"
 model_map: "deepseek-v4.1-flash:cloud"
 model_reduce: "deepseek-v4.1-flash:cloud"
 model_proofread: "deepseek-v4.1-flash:cloud"
+
+# Stile e output
+style: "prose"            # prose = saggio | notes = appunti
+max_output_tokens: 16000  # budget di output: i modelli di reasoning bruciano ~6k
+extras_in_map: false      # true = legacy, sezioni didattiche per ogni chunk
+reduce_mode: "llm"        # llm = sintesi finale | concat = sola concatenazione
 
 # Chunking settings
 chunk_max_tokens: 24000

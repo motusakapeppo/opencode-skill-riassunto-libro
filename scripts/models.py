@@ -40,6 +40,8 @@ class ProofreadResult:
     score: int  # 0-100
     issues: list[str] = field(default_factory=list)
     suggestions: list[str] = field(default_factory=list)
+    must_rewrite: bool = False
+    style: dict = field(default_factory=dict)
 
 
 @dataclass

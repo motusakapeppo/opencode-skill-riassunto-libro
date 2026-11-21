@@ -73,10 +73,11 @@ La skill:
 1. Estrae il testo con PyMuPDF pagina per pagina; solo le pagine senza text layer usabile passano dall'OCR (Tesseract, batch paralleli, escalation DPI), e le pagine che restano illeggibili vengono preparate per la lane vision
 2. Lo divide in chunk con overlap semantico e rilevamento confini di sezione
 3. Rileva il tipo di contenuto (storia, scienza, arte, filosofia, letteratura) e sceglie il prompt adattivo
-4. Processa ogni chunk con deepseek-v4.1-flash:cloud (con feedback loop di completezza)
-5. Applica compressione a densita variabile (10-40% in base a densita informativa)
-6. Esegue proofreading automatico con punteggio 0-100
-7. Genera PDF via Playwright/Chromium con copertina, heading nativi (indice navigabile), grassetti, scheda concetti, domande di verifica, tema adattivo
+4. Processa ogni chunk con deepseek-v4.1-flash:cloud producendo **solo prosa** (paragrafi di 3-6 frasi, connettivi, niente elenchi ne' sezioni finali)
+5. Fonde i blocchi: toglie le sezioni ripetute, deduplica i titoli, marca i confini e genera in un unico passaggio finale il saggio con Da Ricordare, Cronologia, Glossario, Opere Citati, Scheda e Domande
+6. Applica compressione a densita variabile (10-40% in base a densita informativa)
+7. Esegue proofreading automatico con punteggio 0-100 e un gate di stile misurato (bullet dump → max 40, una riscrittura)
+8. Genera PDF via Playwright/Chromium con copertina, heading nativi (indice navigabile), grassetti, scheda concetti, domande di verifica, tema adattivo
 
 ## Output
 
@@ -106,8 +107,9 @@ Ogni modulo e un file separato in `scripts/`:
 | `scripts/pipeline.py` | Orchestratore pipeline (extract → chunk → map → reduce → proofread) |
 | `scripts/extractor.py` | Estrattore universale con routing OCR per pagina, cache e handoff vision |
 | `scripts/chunker.py` | Chunking semantico con overlap e checkpoint |
-| `scripts/llm_engine.py` | LLM interaction, adaptive prompts, map-reduce, boldify, compressione |
-| `scripts/proofreader.py` | Controllo qualita automatico |
+| `scripts/llm_engine.py` | LLM interaction: map in prosa, merge, sintesi finale, boldify, compressione |
+| `scripts/proofreader.py` | Controllo qualità automatico + gate di stile misurato |
+| `scripts/style.py` | Contratto di stile: metriche di prosa, conversione elenchi, StyleViolation |
 | `scripts/renderer.py` | PDF generation via Playwright/Chromium |
 | `scripts/design_system.py` | Generative design spectrum (6 palette + regolazioni dinamiche) |
 | `scripts/config.py` | Configurazione da YAML + env var override |

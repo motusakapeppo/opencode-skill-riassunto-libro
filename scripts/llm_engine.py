@@ -330,7 +330,10 @@ def call_ollama(
     if not is_cloud:
         payload["options"] = {"num_ctx": num_ctx, "temperature": temperature}
     else:
-        payload["max_tokens"] = num_ctx
+        # num_ctx is the CONTEXT window; max_tokens is the OUTPUT budget.
+        # Reasoning models spend ~6k tokens thinking, so a small budget returns
+        # an empty message with HTTP 200 and no error.
+        payload["max_tokens"] = int(getattr(settings, "max_output_tokens", 0) or num_ctx)
         payload["temperature"] = temperature
 
     for attempt in range(retries):
@@ -344,8 +347,18 @@ def call_ollama(
             resp.raise_for_status()
             data = resp.json()
             if is_cloud:
-                return data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            return data.get("message", {}).get("content", "")
+                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                finish = data.get("choices", [{}])[0].get("finish_reason", "")
+            else:
+                content = data.get("message", {}).get("content", "")
+                finish = data.get("done_reason", "")
+
+            if content and content.strip():
+                return content
+
+            # Empty body: almost always the output budget was eaten by reasoning.
+            msg = f"empty content (finish_reason={finish or 'unknown'})"
+            raise ValueError(msg)
         except Exception as exc:
             msg = str(exc)[:80]
             if attempt < retries - 1:
@@ -444,7 +457,12 @@ def map_chunk(
     model = model or settings.model_map
     if content_type is not None:
         prompt_template = get_prompt_template(content_type, lingua=lang)
-    prompt_base = prompt_template.replace("{testo}", chunk["text"])
+    target_chars = max(800, int(len(chunk["text"]) * 0.35))
+    prompt_base = (
+        prompt_template
+        .replace("{testo}", chunk["text"])
+        .replace("{target}", str(target_chars))
+    )
 
     # Inject grounding and citation instructions
     grounding = (
@@ -653,23 +671,95 @@ def _deduplica_testo(essay: Optional[str]) -> str:
 
 
 # ─────────────────────────────────────────────
-#  REDUCE — concatenate, deduplicate, verify
+#  REDUCE — strip per-chunk extras, dedupe, merge
 # ─────────────────────────────────────────────
 
+BLOCK_MARKER = "[[BLOCCO {n}]]"
 
-def reduce_results(results: list[MapResult]) -> str:
-    """Concatenate map results in order, deduplicate, verify citations.
+_EXTRA_HEADING_RE = re.compile(
+    r"^#{1,3}\s*(?:"
+    + "|".join(
+        re.escape(h)
+        for h in (
+            "Da Ricordare", "Cronologia", "Glossario", "Opere Citati",
+            "Scheda Riassuntiva", "Domande di Verifica",
+        )
+    )
+    + r")\s*$",
+    re.IGNORECASE,
+)
 
-    CRITICAL: [Fonte: Blocco N] citations are PRESERVED — never stripped.
+_HEADING_RE = re.compile(r"^#{1,3}\s+(.+?)\s*$")
+
+
+def strip_extra_sections(text: str) -> str:
+    """Remove the didactic sections a chunk generated on its own initiative.
+
+    In a map-reduce those sections would be emitted once per chunk and then
+    concatenated: the essay becomes a list dump. They belong to the final
+    reduce only.
+    """
+    kept: list[str] = []
+    skipping = False
+    for line in (text or "").split("\n"):
+        stripped = line.strip()
+        if _EXTRA_HEADING_RE.match(stripped):
+            skipping = True
+            continue
+        if skipping:
+            if stripped.startswith("#"):
+                skipping = False
+            else:
+                continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def _merge_headings(text: str, seen: set[str]) -> str:
+    """Drop a heading already used by a previous chunk, keep its body."""
+    out: list[str] = []
+    for line in text.split("\n"):
+        m = _HEADING_RE.match(line.strip())
+        if m:
+            key = re.sub(r"\s+", " ", m.group(1).lower())
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(line)
+    return "\n".join(out)
+
+
+def strip_block_markers(text: str) -> str:
+    return re.sub(r"\[\[BLOCCO \d+\]\]\n*", "", text or "").strip()
+
+
+def reduce_results(results: list[MapResult], settings: Optional[Settings] = None) -> str:
+    """Merge map results into one draft, ready for the synthesis pass.
+
+    - per-chunk didactic sections are removed (they are generated once, later)
+    - repeated headings are merged instead of duplicated
+    - block boundaries are marked with [[BLOCCO n]] so the synthesis pass can
+      write real transitions (and so the marker can be stripped afterwards)
+    - [Fonte: Blocco N] citations are PRESERVED
 
     Returns:
-        Combined essay string.
+        Draft essay string.
     """
-    parts = []
-    for r in results:
-        t = r.summary
-        if not re.search(r"^#{1,3}\s+", t, re.MULTILINE):
+    prose = (getattr(settings, "style", "prose") if settings is not None else "prose") == "prose"
+    legacy_heading = bool(getattr(settings, "extras_in_map", False)) if settings is not None else False
+
+    parts: list[str] = []
+    seen_headings: set[str] = set()
+    for idx, r in enumerate(results):
+        t = strip_extra_sections(r.summary or "") if not legacy_heading else (r.summary or "")
+        t = t.strip()
+        if not t:
+            continue
+        t = _merge_headings(t, seen_headings)
+        if not _HEADING_RE.search(t) and not prose:
             t = "### Sezione\n\n" + t
+        if prose:
+            t = BLOCK_MARKER.format(n=idx + 1) + "\n\n" + t
         parts.append(t)
 
     essay = "\n\n".join(parts)
@@ -694,6 +784,151 @@ def reduce_results(results: list[MapResult]) -> str:
     essay = _deduplica_testo(essay)
     essay = re.sub(r"  +", " ", essay)
     return essay
+
+
+# ─────────────────────────────────────────────
+#  SYNTHESIS — one final pass, didactic sections generated once
+# ─────────────────────────────────────────────
+
+STILE_COMUNE_IT = """CONTRATTO DI STILE (verificabile, non negoziabile):
+1. SOLO PROSA nel corpo del saggio. Nessuna riga che inizi con -, *, •, –, oppure "1." / "1)". Nessun elenco.
+2. Paragrafi di 3-6 frasi. Mai un paragrafo di una sola riga.
+3. Ogni paragrafo si apre con un connettivo che lo lega al precedente ("Per questo", "Di conseguenza", "Allo stesso tempo", "Piu' avanti", "Al contrario"). Non ripetere lo stesso incipit in due paragrafi.
+4. Titoli solo quando cambia davvero l'argomento (max 6-8, con ###). Devono essere tematici: "### Il mercato dell'opera a Venezia". VIETATI i titoli-etichetta: "### Introduzione", "### Concetti chiave", "### Esempi", "### Conclusione".
+5. VIETATO trascrivere metadati bibliografici: ISSN, DOI, ISBN, numeri di pagina, "vol. II", "pp. 44-51", nomi di collane o riviste. Se un blocco contiene solo quello, salta il blocco: i contenuti si raccontano, non si citano.
+6. Non ripetere informazioni gia' date: fondi le ripetizioni nella versione piu' chiara.
+7. Le citazioni [Fonte: Blocco N] restano in coda alla frase che sostengono."""
+
+PROMPT_REDUCE_PARTIAL_IT = """Sei un editor. Questo e' un gruppo di sintesi parziali dello stesso libro, in ordine di lettura.
+
+Compito: fonderle in un unico testo continuo, in italiano semplice, senza perdere nomi, date, concetti ed eventi.
+
+{stile}
+
+REGOLE AGGIUNTIVE:
+- Nessuna sezione finale: niente "Da Ricordare", "Cronologia", "Glossario", "Opere Citati", "Scheda Riassuntiva", "Domande di Verifica". Verranno generate dopo, una sola volta.
+- I segnaposto [[BLOCCO n]] servono solo a capire l'ordine: non copiarli, non nominarli.
+- Lunghezza: circa {target} caratteri.
+
+SINTESI PARZIALI:
+{draft}"""
+
+PROMPT_REDUCE_FINAL_IT = """Sei un editor. Questo e' il materiale raccolto da un libro, diviso in blocchi nell'ordine di lettura.
+
+Compito: scrivere UN saggio discorsivo in italiano semplice, per uno studente che prepara un esame. Lavora solo su questo materiale: nessuna conoscenza esterna, nessun evento o nome che non compaia qui.
+
+{stile}
+
+TRANSIZIONI: i segnaposto [[BLOCCO n]] indicano dove finisce un blocco e ne inizia un altro. Non copiarli e non nominarli: usali per collegare i blocchi con una frase di passaggio vera, che dica cosa cambia nel discorso.
+
+APPARATO DIDATTICO — generato UNA SOLA VOLTA, dopo il saggio, con questi titoli esatti:
+### Da Ricordare
+3-5 righe, formato: **Concetto** — spiegazione in una riga.
+### Cronologia
+date principali in ordine cronologico, formato: **Anno** — evento.
+### Glossario
+5-10 termini tecnici, formato: **termine** — definizione.
+### Opere Citati
+opere menzionate, formato: **Titolo** (Autore, anno).
+### Scheda Riassuntiva
+15 righe, formato: Concetto: [termine] - [spiegazione]
+### Domande di Verifica
+5 righe, formato: Domanda: [domanda] - [risposta]
+
+MATERIALE:
+{draft}"""
+
+PROMPT_REPAIR_PROSE_IT = """Il testo qui sotto e' un saggio per studio ma e' uscito come elenco: righe con -, *, • o numerate. Va riscritto come prosa.
+
+{stile}
+
+Riscrivi TUTTO in paragrafi di 3-6 frasi, mantenendo ogni nome, data, concetto ed evento. Non aggiungere nulla che non sia qui. Mantieni le sezioni finali (Da Ricordare, Cronologia, Glossario, Opere Citati, Scheda Riassuntiva, Domande di Verifica) con il loro formato a righe, e mantieni le citazioni [Fonte: Blocco N].
+
+TESTO DA RISCRIVERE:
+{draft}"""
+
+
+def _fmt_prompt(template: str, draft: str, target: int) -> str:
+    return (
+        template.replace("{stile}", STILE_COMUNE_IT)
+        .replace("{target}", str(target))
+        .replace("{draft}", draft)
+    )
+
+
+def _split_blocks(text: str, target_tokens: int) -> list[str]:
+    """Group [[BLOCCO n]] blocks into batches that fit a context window."""
+    blocks = [b for b in re.split(r"(?=\[\[BLOCCO \d+\]\])", text) if b.strip()]
+    groups: list[str] = []
+    current: list[str] = []
+    size = 0
+    for block in blocks:
+        tokens = estimate_tokens(block)
+        if current and size + tokens > target_tokens:
+            groups.append("".join(current))
+            current, size = [block], tokens
+        else:
+            current.append(block)
+            size += tokens
+    if current:
+        groups.append("".join(current))
+    return groups
+
+
+def _reduce_call(template: str, draft: str, settings: Settings, target: int) -> Optional[str]:
+    return call_ollama(
+        settings.model_reduce,
+        _fmt_prompt(template, draft, target),
+        settings,
+        num_ctx=max(16384, int(getattr(settings, "chunk_max_tokens", 24000) or 24000)),
+        temperature=0.3,
+        timeout=600,
+    )
+
+
+def synthesize_essay(draft: str, settings: Settings, lingua: str = "it") -> str:
+    """Turn the merged map output into one essay, sections generated once.
+
+    Large books are folded in passes so each call fits the context window.
+    Falls back to the merged draft if the model returns nothing usable.
+    """
+    mode = getattr(settings, "reduce_mode", "llm")
+    if mode != "llm" or not (draft or "").strip():
+        return strip_block_markers(draft)
+
+    budget = int(getattr(settings, "chunk_max_tokens", 24000) or 24000)
+    current = draft
+    passes = 0
+    while estimate_tokens(current) > budget and passes < 3:
+        groups = _split_blocks(current, max(1, budget // 2))
+        if len(groups) < 2:
+            break
+        folded: list[str] = []
+        for idx, group in enumerate(groups):
+            target = max(2000, int(len(group) * 0.5))
+            out = _reduce_call(PROMPT_REDUCE_PARTIAL_IT, group, settings, target)
+            if not out:
+                logger.error("Synthesis pass %d/%d returned nothing; keeping draft", idx + 1, len(groups))
+                folded.append(group)
+                continue
+            folded.append(BLOCK_MARKER.format(n=idx + 1) + "\n\n" + out.strip())
+        current = "\n\n".join(folded)
+        passes += 1
+        logger.info("Synthesis fold %d: %d groups -> %d chars", passes, len(groups), len(current))
+
+    target = max(4000, int(len(current) * 0.4))
+    essay = _reduce_call(PROMPT_REDUCE_FINAL_IT, current, settings, target)
+    if not essay:
+        logger.error("Final synthesis returned nothing; falling back to the merged draft")
+        return strip_block_markers(current)
+    return strip_block_markers(essay)
+
+
+def repair_prose(text: str, settings: Settings) -> Optional[str]:
+    """One bounded rewrite pass for a document that came out as a list dump."""
+    target = max(4000, int(len(text) * 0.7))
+    out = _reduce_call(PROMPT_REPAIR_PROSE_IT, text, settings, target)
+    return strip_block_markers(out) if out else None
 
 
 # ─────────────────────────────────────────────

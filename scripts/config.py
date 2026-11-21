@@ -29,6 +29,12 @@ class Settings:
     max_retries: int = 5
     retry_base_delay: int = 30
 
+    # --- Style / output ---
+    style: str = "prose"                   # prose | notes
+    max_output_tokens: int = 16000          # reasoning models burn ~6k before content
+    extras_in_map: bool = False            # True = legacy: didactic sections per chunk
+    reduce_mode: str = "llm"               # llm = final synthesis pass | concat = merge only
+
     # --- PDF extraction / OCR ---
     ocr_dpi: int = 200                      # base render DPI for Tesseract
     ocr_dpi_max: int = 300                 # escalation DPI for garbage pages

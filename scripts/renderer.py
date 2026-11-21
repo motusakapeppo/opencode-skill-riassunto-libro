@@ -10,6 +10,7 @@ import re
 from loguru import logger
 from scripts.config import Settings
 from scripts.design_system import DesignSpec, generate_cover_css, generate_header_css, generate_decor_css
+from scripts.style import BULLET_RE, StyleViolation, enforce_prose
 
 
 BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
@@ -37,6 +38,7 @@ def build_html(
     design: DesignSpec,
     titolo: str,
     autore: str = "Autore sconosciuto",
+    style: str = "prose",
 ) -> str:
     """Build complete HTML document from essay text and design spec."""
     # Build body parts
@@ -70,7 +72,17 @@ def build_html(
         s = line.strip()
         if not s:
             continue
-        
+
+        # Lists: styled as lists only in notes mode, as prose otherwise
+        if BULLET_RE.match(line):
+            if style == "notes":
+                body_parts.append(
+                    f'<p class="list-item">{html_paragraph(BULLET_RE.sub("", line).strip())}</p>'
+                )
+            else:
+                body_parts.append(f'<p class="body-text">{html_paragraph(s)}</p>')
+            continue
+
         # Section headers
         if s.startswith("### Da Ricordare"):
             body_parts.append('<h2 class="section-ricordare">Da Ricordare</h2>')
@@ -225,6 +237,10 @@ def build_html(
         text-indent: 1.5em;
         margin: 0.15em 0;
     }}
+    p.list-item {{
+        text-indent: 0;
+        margin: 0.15em 0 0.15em 1.2em;
+    }}
     """
     
     css = base_css + cover_css + header_css + decor_css
@@ -271,7 +287,15 @@ def render_pdf(
     
     Returns output_path.
     """
-    html_content = build_html(essay, design, titolo, autore)
+    # The PDF is the point of no return: refuse to typeset a list dump as an
+    # essay. Minor lists are converted, a full outline raises StyleViolation.
+    essay, stats = enforce_prose(essay, settings)
+    if stats.bullet_lines and getattr(settings, "style", "prose") == "prose":
+        logger.warning(
+            "Style: %d list lines converted to paragraphs before rendering", stats.bullet_lines
+        )
+
+    html_content = build_html(essay, design, titolo, autore, style=getattr(settings, "style", "prose"))
     
     html_path = Path(output_path).with_suffix(".html")
     html_path.parent.mkdir(parents=True, exist_ok=True)
