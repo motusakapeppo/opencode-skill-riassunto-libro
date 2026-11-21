@@ -1,0 +1,12 @@
+# Testo: LF nel repository e nel working tree. Evita il churn CRLF/LF e rende
+# confrontabili i byte che gli hook di encoding controllano.
+* text=auto eol=lf
+
+# Binari: nessuna normalizzazione
+*.png binary
+*.jpg binary
+*.pdf binary
+*.traineddata binary
+*.docx binary
+*.epub binary
+*.mobi binary

@@ -38,12 +38,11 @@ DOCUMENTO (PDF/EPUB/DOCX/MOBI/TXT/MD/HTML/RTF)
   ├─ [3/7] LLM ENGINE (L'Equalizzatore) — Map in prosa + sintesi finale
   │     ├─ MAP: ogni chunk produce SOLO prosa (paragrafi 3-6 frasi, connettivi)
   │     ├─ MAP: vietate sezioni finali, titoli-etichetta e metadati bibliografici
-  │     ├─ Adaptive prompts: rileva tipo contenuto (storia/scienza/arte/filosofia/letteratura)
+  │     ├─ Focus adattivo: storia/scienza/arte/filosofia/letteratura rilevati dal testo
   │     ├─ Grounding: zero allucinazioni, solo dal testo fornito
   │     ├─ Filtro rumore: scarta indici/bibliografie ([SKIP], [NESSUN CONTENUTO UTILE])
   │     ├─ Citazioni: [Fonte: Blocco N] per ogni concetto
   │     ├─ Checkpoint incrementale: riprende da crash
-  │     ├─ Feedback loop: verifica completezza vs originale
   │     ├─ Compressione a densità variabile (10-40% in base a densità informativa)
   │     ├─ MERGE: toglie le sezioni ripetute in coda a ogni chunk, fonde i titoli doppi,
   │     │         marca i confini con [[BLOCCO n]]
@@ -176,6 +175,17 @@ default 40 pagine per run (`vision_max_pages`).
 - `scripts/mega_skill.py`, `scripts/pipeline_unificata.py`, `scripts/riassumi.py` —
   entry point storici, ora shim che inoltrano alla CLI attuale
 - `scripts/css_templates.py` — template CSS (legacy, integrato in design_system.py)
+- `scripts/check_encoding.py` — guardia di encoding (BOM, mojibake, EOL misti, UTF-8 invalido)
+
+## Sviluppo
+
+- **Mai modificare file con `Get-Content`/`Set-Content`/`-replace` di PowerShell**: legge
+  in cp1252 e scrive UTF-8 con BOM, trasformando accenti e trattini in `?`. Usa gli
+  strumenti di edit o Python con `encoding="utf-8"`.
+- Prima di committare: `python scripts/check_encoding.py` (o `--fix` per BOM/EOL).
+- Hook incluso: `git config core.hooksPath .githooks` blocca i commit con file sporchi.
+- Test: `python -m pytest tests -q` (i test di integrazione chiamano l'API e si
+  deselezionano con `--deselect tests/test_integration.py::<nome>`).
 
 ## Configurazione
 

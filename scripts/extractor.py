@@ -833,13 +833,6 @@ def _estrai_ocr(pdf_path: str, settings) -> tuple[str, int]:
     return _join_pages(pages), len(pages)
 
 
-def _diagnostica_e_estrai_pdf(pdf_path: str, settings, deep_scan: bool = False,
-                              lingua: str = "it") -> tuple[str, int, str]:
-    """Tuple wrapper kept for callers of the old API."""
-    result = _extract_pdf_result(pdf_path, settings, deep_scan=deep_scan, lingua=lingua)
-    return result.text, result.num_pages, result.method
-
-
 # ---------------------------------------------------------------------------
 #  Metadata extraction
 # ---------------------------------------------------------------------------

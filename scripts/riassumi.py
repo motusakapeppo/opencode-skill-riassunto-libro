@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Deprecated entry point — kept so old commands keep working.
 
 This script used to chain extract.py + pipeline_unificata.py and emit a DOCX.

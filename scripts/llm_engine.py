@@ -1,16 +1,13 @@
 """
 Unified LLM interaction module for riassunto-libro.
 
-Merges Map-Reduce logic from:
-  - mega_skill.py (equalizzatore_map, equalizzatore_reduce, _contiene_skip,
-    _verifica_citazioni, _deduplica_testo, boldify_intelligente)
-  - pipeline_unificata.py (map_chunk, feedback_loop, reduce_summaries, build_glossary)
-  - riassumi.py (call_llm pattern)
-
 Provides:
-  - call_ollama() — call Ollama API with retry + exponential backoff + jitter
-  - map_chunk() — summarize a single chunk
-  - reduce_results() — concatenate, deduplicate, verify citations
+  - call_ollama() — call the Ollama API with retry, backoff and empty-body retry
+  - build_map_prompt() — one style contract, focus per content type
+  - map_chunk() — summarize a single chunk, prose only
+  - reduce_results() — strip per-chunk extras, merge headings, mark blocks
+  - synthesize_essay() — one final pass: the essay plus the didactic sections
+  - repair_prose() — bounded rewrite when the output came out as a list
   - boldify_intelligente() — apply **bold** to known entities
   - _deduplica_testo() — three-level deduplication
   - _verifica_citazioni() — verify citation integrity
@@ -83,184 +80,145 @@ def detect_content_type(text_sample: str) -> ContentType:
 
 
 # ─────────────────────────────────────────────
-#  DEFAULT PROMPT TEMPLATES
+#  MAP PROMPTS — one style contract, per-type focus
 # ─────────────────────────────────────────────
 
-PROMPT_MAP_IT = """Riscrivi il testo in italiano SEMPLICE, CONCISO, completo.
+MAP_STYLE_IT = """CONTRATTO DI STILE (verificabile):
+1. SOLO PROSA. Nessun elenco, nessuna riga che inizi con -, *, •, "1." o "1)".
+2. Paragrafi di 3-6 frasi, ognuno legato al precedente da un connettivo ("Per questo", "Di conseguenza", "Allo stesso tempo", "Piu' avanti").
+3. VIETATO trascrivere metadati bibliografici: ISSN, DOI, ISBN, numeri di pagina, "vol. II", "pp. 44-51", nomi di collane o riviste. I contenuti si raccontano, non si citano.
+4. VIETATE le sezioni finali: niente "Da Ricordare", "Cronologia", "Glossario", "Opere Citati", "Scheda Riassuntiva", "Domande di Verifica". Vengono generate una volta sola, alla fine del libro.
+5. VIETATI i titoli-etichetta: "### Concetti chiave", "### Esempi", "### Introduzione", "### Conclusione".
+6. Non nominare il supporto: niente "questo blocco", "il testo fornito", "l'autore del brano"."""
+
+MAP_STYLE_EN = """STYLE CONTRACT (verifiable):
+1. PROSE ONLY. No lists, no line starting with -, *, •, "1." or "1)".
+2. Paragraphs of 3-6 sentences, each linked to the previous one by a connective.
+3. NEVER transcribe bibliographic metadata: ISSN, DOI, ISBN, page numbers, "vol. II", "pp. 44-51", series or journal names.
+4. NO closing sections: they are generated once, at the end of the book.
+5. NO label headings: "### Key concepts", "### Examples", "### Introduction", "### Conclusion".
+6. Do not name the medium: no "this block", "the provided text"."""
+
+MAP_FOCUS_IT = {
+    ContentType.HISTORY: (
+        "da storico. Spiega cause e conseguenze, tieni date e luoghi, "
+        "distingui i fatti accertati dalle interpretazioni."
+    ),
+    ContentType.SCIENCE: (
+        "da divulgatore scientifico. Parti dall'ipotesi, racconta esperimento "
+        "o modello, arriva ai risultati e a cosa cambiano."
+    ),
+    ContentType.ART: (
+        "da critico d'arte. Descrivi le opere, lo stile, il contesto in cui "
+        "nascono e perche' contano."
+    ),
+    ContentType.PHILOSOPHY: (
+        "da filosofo che spiega a un principiante. Definisci i termini, mostra "
+        "la tesi, poi l'obiezione piu' forte."
+    ),
+    ContentType.LITERATURE: (
+        "da critico letterario. Trama, personaggi, temi, scelte di stile, "
+        "contesto storico-letterario."
+    ),
+    ContentType.GENERAL: "",
+}
+
+MAP_FOCUS_EN = {
+    ContentType.HISTORY: "as a historian: causes and consequences, dates and places, facts apart from interpretations.",
+    ContentType.SCIENCE: "as a science writer: hypothesis, experiment or model, results, what changes.",
+    ContentType.ART: "as an art critic: works, style, context, why they matter.",
+    ContentType.PHILOSOPHY: "as a philosopher explaining to a beginner: define terms, state the thesis, then the strongest objection.",
+    ContentType.LITERATURE: "as a literary critic: plot, characters, themes, style, historical context.",
+    ContentType.GENERAL: "",
+}
+
+_MAP_BASE_IT = """Riscrivi il testo in italiano SEMPLICE, CONCISO, completo.
+
+Questo e' un blocco di un libro piu' lungo: verra' fuso con gli altri blocchi alla fine. Non concludere il discorso e non aggiungere sezioni finali.
 
 Parla come un amico intelligente che spiega a uno stanco dopo lavoro. Frasi corte, parole di tutti i giorni.
 
-TERMINI TECNICI: se usi parole specialistiche (recitativo, monodia, libretto...), aggiungi subito una brevissima spiegazione tra parentesi: "recitativo (canto parlato)", "libretto (testo dell'opera)".
+{stile}
 
-GRASSETTO INTELLIGENTE: usa **grassetto** per evidenziare in modo strategico:
-- **Nomi propri** di persone, luoghi, istituzioni importanti (es: **Monteverdi**, **Venezia**, **Teatro San Cassiano**)
-- **Date e periodi** chiave (es: **1637**, **primo Seicento**)
-- **Concetti portanti** che sono il tema centrale del discorso (es: **brevità**, **frequenza delle arie**, **recitativo**, **mercato dell'opera**)
-- **Relazioni causali** e punti di svolta (es: **passaggio dall'opera di corte all'opera a pagamento**, **nascita del melodramma**)
-- **Termini tecnici** alla loro prima occorrenza (es: **libretto**, **monodia**, **basso continuo**)
+TAGLIO DEL CONTENUTO:
+{focus}
 
-Regola d'oro: non più di 2-3 grassetti per paragrafo. Il grassetto deve GUIDARE l'occhio, non appesantire.
+TERMINI TECNICI: se usi parole specialistiche (recitativo, monodia, libretto...), aggiungi subito una brevissima spiegazione tra parentesi: "recitativo (canto parlato)".
 
-REGOLE:
-1. COMPLETEZZA: ogni nome, data, concetto, evento deve restare.
-2. PARLA SEMPLICE: come al bar. Frasi corte, parole comuni.
-3. CONCISIONE: vai dritto al punto. Taglia fronzoli.
-4. LUNGHEZZA: circa {target}.
-5. ### per i titoli.
-6. ZERO elenchi puntati. ZERO asterischi singoli. Solo **grassetto** va bene.
-7. Alla fine del riassunto, aggiungi QUESTE SEZIONI nell'ordine:
+GRASSETTO INTELLIGENTE: usa **grassetto** per nomi propri, date chiave e concetti portanti. Massimo 2-3 grassetti per paragrafo.
 
-### Da Ricordare
-Scrivi 3-5 concetti chiave del testo, ognuno come frase breve. Formato: **Concetto** — spiegazione in una riga.
+COMPLETEZZA: ogni nome, data, concetto, evento deve restare.
 
-### Cronologia
-Elenco delle date principali menzionate, in ordine cronologico. Formato: **Anno** — evento.
+LUNGHEZZA: circa {target} caratteri. Meglio denso che lungo.
 
-### Glossario
-5-10 termini tecnici con definizione breve. Formato: **termine** — definizione.
-
-### Opere Citati
-Elenco delle opere, libri, articoli menzionati. Formato: **Titolo** (Autore, anno).
-
-Poi: ### Scheda Riassuntiva (15 concetti, formato: Concetto: [termine] - [spiegazione]) e ### Domande di Verifica (5 domande, formato: Domanda: [domanda] - [risposta]).
-
-Infine:
+Alla fine del riassunto, obbligatoriamente, il blocco entita':
 ===ENTITA===
-PERSONE: separato da |
-DATE: separato da |
-OPERE/EVENTI/CONCETTI: separato da |
+PERSONE: separate da |
+DATE: separate da |
+OPERE/EVENTI/CONCETTI: separate da |
 ===FINE ENTITA===
 
 TESTO:
 {testo}"""
 
-PROMPT_MAP_EN = """Rewrite in simple, CONCISE, complete Italian.
+_MAP_BASE_EN = """Rewrite the text in simple, concise, complete Italian.
+
+This is one block of a longer book: it will be merged with the other blocks at the end. Do not conclude the argument and do not add closing sections.
 
 Write like a smart friend explaining to a tired friend after work. Short sentences, everyday words.
 
-TECHNICAL TERMS: when you use specialist words (recitative, monody, libretto...), add a quick explanation in parentheses: "recitative (sung speech)", "libretto (opera text)".
+{stile}
 
-BOLD: use **word** to highlight important names, key dates, core concepts. Ex: **Monteverdi**, **1637**, **recitative**. Dont overdo it.
+CONTENT ANGLE:
+{focus}
 
-RULES:
-1. COMPLETENESS: every name, date, concept, event must stay.
-2. SIMPLE LANGUAGE: like at a bar. Short sentences, common words.
-3. CONCISE: get to the point. Cut fluff.
-4. LENGTH: about {target}.
-5. Use ### for section titles.
-6. ZERO bullet points. ZERO single asterisks. Only **bold** is fine.
-7. At the end of the summary, add THESE SECTIONS in order:
+TECHNICAL TERMS: when you use specialist words (recitative, monody, libretto...), add a quick explanation in parentheses: "recitative (sung speech)".
 
-### Da Ricordare
-Write 3-5 key concepts from the text, each as a short phrase. Format: **Concept** — one-line explanation.
+BOLD: use **word** for proper names, key dates and core concepts. At most 2-3 per paragraph.
 
-### Cronologia
-List the main dates mentioned, in chronological order. Format: **Year** — event.
+COMPLETENESS: every name, date, concept, event must stay.
 
-### Glossario
-5-10 technical terms with short definitions. Format: **term** — definition.
+LENGTH: about {target} characters. Dense beats long.
 
-### Opere Citati
-List of works, books, articles mentioned. Format: **Title** (Author, year).
-
-Then: ### Scheda Riassuntiva (15 concepts, format: Concetto: [term] - [explanation]) and ### Domande di Verifica (5 questions, format: Domanda: [question] - [answer]).
-
-Finally:
-===ENTITA===
-PERSONE: list separated by |
-DATE: list separated by |
-OPERE/EVENTI/CONCETTI: list separated by |
-===FINE ENTITA===
+At the end, mandatorily, the entity block:
+===ENTITIES===
+PEOPLE: separated by |
+DATES: separated by |
+WORKS/EVENTS/CONCEPTS: separated by |
+===END ENTITIES===
 
 TEXT:
 {testo}"""
 
 
-PROMPT_TEMPLATES = {
-    ContentType.HISTORY: """Sei uno storico specializzato. Analizza il testo con attenzione alle relazioni causali, alle cronologie e ai contesti. Spiega come gli eventi si collegano tra loro, chi sono i protagonisti e perché le loro azioni sono significative.
+def build_map_prompt(content_type: ContentType = ContentType.GENERAL, lingua: str = "it") -> str:
+    """Map prompt: same style contract everywhere, different focus per type.
 
-REGOLE:
-1. Preserva TUTTI i nomi propri, date, trattati, eventi
-2. Spiega le RELAZIONI CAUSALI: "X è successo perché Y, e questo ha portato a Z"
-3. Contestualizza: spiega perché un evento è importante nel suo periodo storico
-4. Usa ### per i titoli delle sezioni
-5. ZERO elenchi puntati
-6. Alla fine: ### Da Ricordare, ### Cronologia, ### Glossario, ### Opere Citati, ### Scheda Riassuntiva, ### Domande di Verifica
-7. Poi: ===ENTITA=== ... ===FINE ENTITA===
+    ``lingua`` describes the book, not the essay: the output is always Italian.
+    """
+    if lingua == "en":
+        template, style = _MAP_BASE_EN, MAP_STYLE_EN
+        focus = MAP_FOCUS_EN.get(content_type, "")
+        empty_angle = "CONTENT ANGLE:\n{focus}\n\n"
+    else:
+        template, style = _MAP_BASE_IT, MAP_STYLE_IT
+        focus = MAP_FOCUS_IT.get(content_type, "")
+        empty_angle = "TAGLIO DEL CONTENUTO:\n{focus}\n\n"
 
-TESTO:
-{testo}""",
-
-    ContentType.SCIENCE: """Sei un divulgatore scientifico. Spiega i concetti con chiarezza, definendo ogni termine tecnico. Usa analogie per rendere accessibili i concetti complessi.
-
-REGOLE:
-1. Definisci OGNI termine tecnico la prima volta che appare
-2. Usa ANALOGIE e metafore per spiegare concetti astratti
-3. Preserva dati, formule, esperimenti e risultati
-4. Spiega il METODO: come sono state ottenute le conclusioni
-5. Usa ### per i titoli delle sezioni
-6. ZERO elenchi puntati
-7. Alla fine: ### Da Ricordare, ### Glossario, ### Scheda Riassuntiva, ### Domande di Verifica
-8. Poi: ===ENTITA=== ... ===FINE ENTITA===
-
-TESTO:
-{testo}""",
-
-    ContentType.ART: """Sei un critico d'arte/musica. Descrivi le opere con sensibilità estetica, collegandole al contesto storico e culturale. Spiega perché sono significative.
-
-REGOLE:
-1. Descrivi lo STILE e la TECNICA con linguaggio evocativo ma preciso
-2. Collega le opere al CONTESTO storico e culturale
-3. Spiega l'INNOVAZIONE: cosa rende unica ogni opera
-4. Preserva titoli di opere, nomi di artisti, date, correnti
-5. Usa ### per i titoli delle sezioni
-6. ZERO elenchi puntati
-7. Alla fine: ### Da Ricordare, ### Cronologia, ### Glossario, ### Opere Citati, ### Scheda Riassuntiva, ### Domande di Verifica
-8. Poi: ===ENTITA=== ... ===FINE ENTITA===
-
-TESTO:
-{testo}""",
-
-    ContentType.PHILOSOPHY: """Sei un filosofo. Analizza gli argomenti, le tesi e le antitesi. Chiarisci le distinzioni concettuali e la struttura del ragionamento.
-
-REGOLE:
-1. Esponi la TESI centrale e le ANTITESI
-2. Chiarisci le DISTINZIONI CONCETTUALI
-3. Spiega la STRUTTURA del ragionamento (premesse → conclusioni)
-4. Preserva termini filosofici e nomi di pensatori
-5. Usa ### per i titoli delle sezioni
-6. ZERO elenchi puntati
-7. Alla fine: ### Da Ricordare, ### Glossario, ### Scheda Riassuntiva, ### Domande di Verifica
-8. Poi: ===ENTITA=== ... ===FINE ENTITA===
-
-TESTO:
-{testo}""",
-
-    ContentType.LITERATURE: """Sei un critico letterario. Analizza personaggi, temi, stile narrativo e struttura dell'opera. Collega gli elementi al contesto storico-letterario.
-
-REGOLE:
-1. Analizza PERSONAGGI: motivazioni, evoluzione, relazioni
-2. Identifica TEMI principali e secondari
-3. Descrivi lo STILE NARRATIVO e le scelte formali
-4. Collega l'opera al CONTESTO storico-letterario
-5. Preserva titoli, autori, date, correnti letterarie
-6. Usa ### per i titoli delle sezioni
-7. ZERO elenchi puntati
-8. Alla fine: ### Da Ricordare, ### Cronologia, ### Glossario, ### Opere Citati, ### Scheda Riassuntiva, ### Domande di Verifica
-9. Poi: ===ENTITA=== ... ===FINE ENTITA===
-
-TESTO:
-{testo}""",
-
-    ContentType.GENERAL: PROMPT_MAP_IT,  # Use the default prompt
-}
+    prompt = template.replace("{stile}", style)
+    if focus:
+        return prompt.replace("{focus}", focus)
+    return prompt.replace(empty_angle, "")
 
 
 def get_prompt_template(content_type: ContentType, lingua: str = "it") -> str:
-    """Return the appropriate prompt template for the content type and language."""
-    if lingua == "en":
-        return PROMPT_MAP_EN  # English fallback to default
-    return PROMPT_TEMPLATES.get(content_type, PROMPT_MAP_IT)
+    """Return the map prompt for the content type and source language."""
+    return build_map_prompt(content_type, lingua)
+
+
+PROMPT_MAP_IT = build_map_prompt(ContentType.GENERAL, "it")
+PROMPT_MAP_EN = build_map_prompt(ContentType.GENERAL, "en")
+
 
 # ─────────────────────────────────────────────
 #  CONSTANTS
@@ -510,70 +468,6 @@ def map_chunk(
         entities=entities,
         token_count=estimate_tokens(summary),
     )
-
-
-# ─────────────────────────────────────────────
-#  FEEDBACK LOOP
-# ─────────────────────────────────────────────
-
-PROMPT_FEEDBACK = """Verifica la completezza del RIASSUNTO rispetto al testo ORIGINALE.
-
-ORIGINALE:
-{originale}
-
-RIASSUNTO:
-{riassunto}
-
-Se i concetti principali sono coperti, dai COVERAGE >= 90%. Se mancano entità IMPORTANTI, scrivi un breve paragrafo integrativo.
-
-Formato:
-COVERAGE: X%
-MANCANTI: elenco separato da |
-===INTEGRAZIONE===
-(paragrafo integrativo solo se serve)
-===FINE INTEGRAZIONE==="""
-
-
-def feedback_loop(
-    original_text: str,
-    map_out: MapResult,
-    settings: Settings,
-    *,
-    model: Optional[str] = None,
-) -> dict:
-    """Verify completeness of a map result against original text.
-
-    Returns:
-        Dict with keys "coverage" (int 0-100) and "integration" (str).
-    """
-    model = model or settings.model_proofread
-    prompt = PROMPT_FEEDBACK.replace("{originale}", original_text[:8000])
-    prompt = prompt.replace("{riassunto}", map_out.summary)
-
-    try:
-        content = call_ollama(
-            model=model,
-            prompt=prompt,
-            settings=settings,
-            num_ctx=16384,
-            temperature=0.1,
-            timeout=120,
-        )
-        if content is None:
-            return {"coverage": 100, "integration": ""}
-
-        cov_match = re.search(r"COVERAGE:\s*(\d+)%", content)
-        coverage = int(cov_match.group(1)) if cov_match else 100
-
-        int_match = re.search(
-            r"===INTEGRAZIONE===\n(.*?)===FINE INTEGRAZIONE===", content, re.DOTALL
-        )
-        integration = int_match.group(1).strip() if int_match else ""
-
-        return {"coverage": coverage, "integration": integration}
-    except Exception as exc:
-        logger.warning("Feedback loop error: %s", exc)
-        return {"coverage": 100, "integration": ""}
 
 
 # ─────────────────────────────────────────────

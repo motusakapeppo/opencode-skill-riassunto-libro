@@ -1,6 +1,6 @@
 # Mega-Skill Riassunto Universitario
 
-Skill per OpenCode che converte libri e documenti (PDF, EPUB, DOCX, MOBI, TXT, MD, HTML, RTF) in un **saggio discorsivo .pdf** per studio esame, con linguaggio semplice, grassetti automatici, zero elenchi, zero asterischi, e apparato didattico completo (scheda concetti + domande di verifica).
+Skill per OpenCode che converte libri e documenti (PDF, EPUB, DOCX, MOBI, TXT, MD, HTML, RTF) in un **saggio discorsivo .pdf** per studio esame: prosa continua (niente elenchi), grassetti automatici, apparato didattico completo (scheda concetti + domande di verifica). In modalita `notes` produce invece appunti a elenchi.
 
 ## Requisiti
 
@@ -111,6 +111,7 @@ Ogni modulo e un file separato in `scripts/`:
 | `scripts/llm_engine.py` | LLM interaction: map in prosa, merge, sintesi finale, boldify, compressione |
 | `scripts/proofreader.py` | Controllo qualità automatico + gate di stile misurato |
 | `scripts/style.py` | Contratto di stile: metriche di prosa, conversione elenchi, StyleViolation |
+| `scripts/check_encoding.py` | Guardia di encoding: BOM, mojibake, EOL misti, UTF-8 invalido |
 | `scripts/renderer.py` | PDF generation via Playwright/Chromium |
 | `scripts/design_system.py` | Generative design spectrum (6 palette + regolazioni dinamiche) |
 | `scripts/config.py` | Configurazione da YAML + env var override |

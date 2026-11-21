@@ -1,0 +1,18 @@
+#!/bin/sh
+# Commit gate: test files must be clean UTF-8 (no BOM, no mojibake, no mixed EOL).
+# Install once per clone:  git config core.hooksPath .githooks
+root=$(git rev-parse --show-toplevel)
+
+python "$root/scripts/check_encoding.py" --staged
+status=$?
+
+if [ $status -ne 0 ]; then
+    echo ""
+    echo "COMMIT BLOCCATO: file di testo con encoding sporco."
+    echo "  - BOM / EOL:  python scripts/check_encoding.py --fix"
+    echo "  - caratteri corrotti (?, U+FFFD, mojibake): ripristina il contenuto"
+    echo "    (git checkout -- <file> e riscrivi con uno strumento UTF-8)"
+    exit 1
+fi
+
+exit 0

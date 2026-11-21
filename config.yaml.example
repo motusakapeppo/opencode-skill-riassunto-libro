@@ -37,13 +37,16 @@ ocr_preprocess: true
 # Cache estrazione (i re-run non rifanno OCR)
 cache_enabled: true
 cache_dir: null               # null = <cartella file>/.riassunto-cache
+pdf_layout_probe: true        # prova pdftotext -layout e usalo solo se batte PyMuPDF
 
 # Lane vision (pagine che l'OCR non riesce a leggere)
 vision_enabled: true
 vision_first: false           # manda tutto il libro alla vision (doc brevi)
 vision_first_max_pages: 30
 vision_max_pages: 40
+vision_transcript: null       # path a transcript.json della lane vision
 
 playwright_headless: true
+log_level: "INFO"
 max_retries: 5
 retry_base_delay: 30

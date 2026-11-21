@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Deprecated entry point — kept so old commands keep working.
 
 The unified pipeline (28 KB, subprocess calls to extract.py) was replaced by

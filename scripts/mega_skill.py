@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Deprecated entry point — kept so old commands keep working.
 
 The monolithic implementation (93 KB, old prompts, whole-book OCR) was replaced

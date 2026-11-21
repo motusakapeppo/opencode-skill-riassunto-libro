@@ -1,5 +1,5 @@
 """
-Pipeline orchestrator — connects extract → chunk → map → reduce → render.
+Pipeline orchestrator — extract → chunk → map (prose) → merge → synthesis → proofread.
 
 Unified entry point replacing:
 - processa_libro() from mega_skill.py
@@ -14,77 +14,14 @@ from scripts.models import Chunk, MapResult, EntitySet, PipelineResult
 from scripts.extractor import extract_document
 from scripts.chunker import split_into_chunks
 from scripts.llm_engine import (
+    boldify_intelligente,
+    build_map_prompt,
+    detect_content_type,
     map_chunk,
     reduce_results,
-    synthesize_essay,
     repair_prose,
-    boldify_intelligente,
+    synthesize_essay,
 )
-
-# ---------------------------------------------------------------------------
-#  Prompt templates (from mega_skill.py lines 354-440)
-# ---------------------------------------------------------------------------
-
-PROMPT_MAP_IT = """Riscrivi il testo in italiano SEMPLICE, CONCISO, completo.
-
-Questo e' un blocco di un libro piu' lungo: verra' fuso con altri blocchi alla fine. Non concludere il discorso e non aggiungere sezioni finali.
-
-Parla come un amico intelligente che spiega a uno stanco dopo lavoro. Frasi corte, parole di tutti i giorni.
-
-TERMINI TECNICI: se usi parole specialistiche (recitativo, monodia, libretto...), aggiungi subito una brevissima spiegazione tra parentesi: "recitativo (canto parlato)".
-
-GRASSETTO INTELLIGENTE: usa **grassetto** per nomi propri, date chiave e concetti portanti. Massimo 2-3 grassetti per paragrafo.
-
-CONTRATTO DI STILE (verificabile):
-1. SOLO PROSA. Nessun elenco, nessuna riga che inizi con -, *, •, "1." o "1)".
-2. Paragrafi di 3-6 frasi, ognuno legato al precedente da un connettivo ("Per questo", "Di conseguenza", "Allo stesso tempo", "Piu' avanti").
-3. VIETATO trascrivere metadati bibliografici: ISSN, DOI, ISBN, numeri di pagina, "vol. II", "pp. 44-51", nomi di collane o riviste. I contenuti si raccontano, non si citano.
-4. VIETATE le sezioni finali: niente "Da Ricordare", "Cronologia", "Glossario", "Opere Citati", "Scheda Riassuntiva", "Domande di Verifica". Vengono generate una sola volta, alla fine del libro.
-5. VIETATI i titoli-etichetta: "### Concetti chiave", "### Esempi", "### Introduzione", "### Conclusione".
-6. Non nominare il supporto: niente "questo blocco", "il testo fornito", "l'autore del brano".
-7. COMPLETEZZA: ogni nome, data, concetto, evento deve restare.
-8. Lunghezza: circa {target} caratteri. Meglio denso che lungo.
-
-Alla fine del riassunto, obbligatoriamente, il blocco entita':
-===ENTITA===
-PERSONE: separate da |
-DATE: separate da |
-OPERE/EVENTI/CONCETTI: separate da |
-===FINE ENTITA===
-
-TESTO:
-{testo}"""
-
-PROMPT_MAP_EN = """Rewrite in simple, CONCISE, complete Italian.
-
-This is one block of a longer book: it will be merged with other blocks at the end. Do not conclude the argument and do not add closing sections.
-
-Write like a smart friend explaining to a tired friend after work. Short sentences, everyday words.
-
-TECHNICAL TERMS: when you use specialist words (recitative, monody, libretto...), add a quick explanation in parentheses: "recitative (sung speech)".
-
-BOLD: use **word** for proper names, key dates and core concepts. At most 2-3 per paragraph.
-
-STYLE CONTRACT (verifiable):
-1. PROSE ONLY. No lists, no line starting with -, *, •, "1." or "1)".
-2. Paragraphs of 3-6 sentences, each linked to the previous one by a connective ("For this reason", "As a result", "At the same time", "Later").
-3. NEVER transcribe bibliographic metadata: ISSN, DOI, ISBN, page numbers, "vol. II", "pp. 44-51", journal or series names. Content is told, not cited.
-4. NO closing sections: no "Da Ricordare", "Cronologia", "Glossario", "Opere Citati", "Scheda Riassuntiva", "Domande di Verifica". They are generated once, at the end of the book.
-5. NO label headings: "### Key concepts", "### Examples", "### Introduction", "### Conclusion".
-6. Do not name the medium: no "this block", "the provided text", "the author of the passage".
-7. COMPLETENESS: every name, date, concept, event must stay.
-8. Length: about {target} characters. Dense beats long.
-
-At the end, mandatorily, the entity block:
-===ENTITIES===
-PEOPLE: separated by |
-DATES: separated by |
-WORKS/EVENTS/CONCEPTS: separated by |
-===END ENTITIES===
-
-TEXT:
-{testo}"""
-
 
 def run_pipeline(
     file_path: str,
@@ -157,8 +94,10 @@ def run_pipeline(
     chunks = split_into_chunks(raw_text, settings)
     logger.info(f"Chunked: {len(chunks)} chunks")
 
-    # Phase 3: Map (summarize each chunk)
-    prompt_template = PROMPT_MAP_EN if lingua == "en" else PROMPT_MAP_IT
+    # Phase 3: Map (each chunk in prose, focus per content type)
+    content_type = detect_content_type(raw_text[:4000])
+    prompt_template = build_map_prompt(content_type, lingua)
+    logger.info(f"Content type: {content_type}")
     results: list[MapResult] = []
     for chunk in chunks:
         # Convert Chunk object to dict for map_chunk compatibility

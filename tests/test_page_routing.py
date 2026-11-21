@@ -1,4 +1,4 @@
-﻿"""Regression tests for page-level routing, cache and vision handoff.
+"""Regression tests for page-level routing, cache and vision handoff.
 
 Fast and offline: no Tesseract calls, no LLM calls.
 """

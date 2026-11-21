@@ -114,5 +114,19 @@ def load_settings(config_path: Optional[Path] = None) -> Settings:
         current = getattr(settings, field_name)
         overridden = _env_override(field_name, current)
         setattr(settings, field_name, overridden)
-    
+
+    _configure_logging(settings.log_level)
     return settings
+
+
+def _configure_logging(level: str) -> None:
+    """Honour log_level: without this, the key was declared and ignored."""
+    try:
+        import sys
+
+        from loguru import logger as _logger
+
+        _logger.remove()
+        _logger.add(sys.stderr, level=(level or "INFO").upper())
+    except Exception:  # logging must never break the pipeline
+        pass
