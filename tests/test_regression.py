@@ -44,8 +44,8 @@ def test_new_modules_importable():
     import importlib
     for module in ["scripts.config", "scripts.models", "scripts.pipeline",
                    "scripts.extractor", "scripts.chunker", "scripts.llm_engine",
-                   "scripts.design_system", "scripts.proofreader",
-                   "scripts.cli"]:
+                   "scripts.style", "scripts.design_system", "scripts.proofreader",
+                   "scripts.renderer", "scripts.runner", "scripts.cli"]:
         try:
             importlib.import_module(module)
         except ImportError as e:

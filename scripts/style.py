@@ -72,8 +72,15 @@ class StyleStats:
         return (self.lists / self.words * 1000) if self.words else 0.0
 
     def is_bullet_dump(self, max_ratio: float = 0.03, max_lists_per_1000: float = 2.0) -> bool:
-        """Spec threshold: a document that is structurally an outline."""
-        return self.bullet_ratio > max_ratio or self.lists_per_1000_words > max_lists_per_1000
+        """Spec threshold: a document that is structurally an outline.
+
+        The ratio alone is meaningless on short documents (4 bullet lines in a
+        200-line text is 2%, but 4 lines in a 40-line text is 10%), so it only
+        fires from 5 bullet lines up. Density per 1000 words has no such problem.
+        """
+        ratio_dump = self.bullet_ratio > max_ratio and self.bullet_lines >= 5
+        density_dump = self.lists_per_1000_words > max_lists_per_1000 and self.lists >= 3
+        return ratio_dump or density_dump
 
     def is_severe(self) -> bool:
         """Render gate: too far gone to be fixed by converting markers."""

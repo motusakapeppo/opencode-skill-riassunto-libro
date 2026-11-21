@@ -11,7 +11,7 @@ from typing import Optional
 from loguru import logger
 from scripts.config import Settings, load_settings
 from scripts.models import Chunk, MapResult, EntitySet, PipelineResult
-from scripts.extractor import extract_document, estrai_metadati
+from scripts.extractor import extract_document
 from scripts.chunker import split_into_chunks
 from scripts.llm_engine import (
     map_chunk,
@@ -198,7 +198,7 @@ def run_pipeline(
     logger.info(f"Merged draft: {len(draft):,} chars")
 
     # Phase 5: Synthesis — prose essay + didactic sections, generated once
-    essay = synthesize_essay(draft, settings, lingua)
+    essay = synthesize_essay(draft, settings)
     logger.info(f"Synthesized: {len(essay):,} chars (mode={settings.reduce_mode})")
 
     # Phase 6: Boldify — apply **bold** to known entities

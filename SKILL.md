@@ -101,8 +101,13 @@ visibile che un PDF illeggibile.
 ```
 riassumi D:\percorso\libro.pdf
 riassumi D:\percorso\libro.epub in italiano
-riassumi D:\Downloads\liber.pdf en      ← se il libro e in inglese
+riassumi D:\Downloads\liber.pdf en      ← libro in inglese: cambia il modello OCR
+                                            e i marker, l'output resta in italiano
 ```
+
+La lingua (`it`/`en`) descrive **il libro**, non l'output: il saggio è sempre in
+italiano semplice, perché serve a studiare in italiano. Un libro inglese va
+letto con `en` per non mandare testo inglese al modello OCR italiano.
 
 Oppure allega il file e scrivi "riassumi questo libro"
 
@@ -155,16 +160,21 @@ default 40 pagine per run (`vision_max_pages`).
 
 ## Scripts
 
-- `scripts/cli.py` — entry point CLI
-- `scripts/pipeline.py` — orchestratore pipeline (extract → chunk → map → reduce → proofread)
+- `scripts/cli.py` — entry point CLI (argomenti → `runner`)
+- `scripts/runner.py` — esecuzione condivisa: pipeline + render + riga `VISION_REQUIRED`
+- `scripts/pipeline.py` — orchestratore (extract → chunk → map → sintesi → proofread)
 - `scripts/extractor.py` — estrattore universale con routing OCR per pagina e handoff vision
 - `scripts/chunker.py` — chunking semantico con overlap
-- `scripts/llm_engine.py` — LLM interaction, adaptive prompts, map-reduce, boldify, compression
-- `scripts/proofreader.py` — controllo qualità automatico
-- `scripts/renderer.py` — PDF generation via Playwright/Chromium
+- `scripts/llm_engine.py` — map in prosa, merge, sintesi finale, boldify, compressione
+- `scripts/style.py` — contratto di stile: metriche, conversione elenchi, `StyleViolation`
+- `scripts/proofreader.py` — controllo qualità automatico + gate di stile
+- `scripts/renderer.py` — PDF via Playwright/Chromium, con rifiuto dei bullet dump
 - `scripts/design_system.py` — generative design spectrum (6 palette + regolazioni dinamiche)
 - `scripts/config.py` — configurazione da YAML + env var override
 - `scripts/models.py` — data models condivisi (Chunk, EntitySet, MapResult, PipelineResult)
+- `scripts/extract.py` — estrattore da riga di comando (`--meta`, `--json`) per debug
+- `scripts/mega_skill.py`, `scripts/pipeline_unificata.py`, `scripts/riassumi.py` —
+  entry point storici, ora shim che inoltrano alla CLI attuale
 - `scripts/css_templates.py` — template CSS (legacy, integrato in design_system.py)
 
 ## Configurazione

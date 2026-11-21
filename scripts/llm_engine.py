@@ -886,8 +886,11 @@ def _reduce_call(template: str, draft: str, settings: Settings, target: int) -> 
     )
 
 
-def synthesize_essay(draft: str, settings: Settings, lingua: str = "it") -> str:
+def synthesize_essay(draft: str, settings: Settings) -> str:
     """Turn the merged map output into one essay, sections generated once.
+
+    Output is always Italian: ``lingua`` only selects the prompt used to read
+    the source and the Tesseract model, never the output language.
 
     Large books are folded in passes so each call fits the context window.
     Falls back to the merged draft if the model returns nothing usable.

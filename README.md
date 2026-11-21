@@ -24,9 +24,9 @@ Skill per OpenCode che converte libri e documenti (PDF, EPUB, DOCX, MOBI, TXT, M
    playwright install chromium
    ```
 
-5. **Python 3.10+** con pacchetti:
+6. **Python 3.10+** con pacchetti:
    ```
-   pip install requests PyMuPDF pdfplumber pypdf pytesseract pdf2image loguru pyyaml playwright python-docx ebooklib beautifulsoup4
+   pip install requests PyMuPDF pdfplumber pypdf pytesseract Pillow loguru pyyaml playwright python-docx ebooklib beautifulsoup4
    ```
 
 ## Installazione
@@ -63,7 +63,7 @@ In qualsiasi sessione OpenCode, basta scrivere:
 riassumi D:\percorso\del\libro.pdf
 ```
 
-Oppure, se il libro e in inglese e vuoi l'output in italiano:
+Oppure, se il libro e in inglese (l'output resta in italiano):
 
 ```
 riassumi D:\percorso\libro.pdf en
@@ -104,7 +104,8 @@ Ogni modulo e un file separato in `scripts/`:
 | `SKILL.md` | Istruzioni per OpenCode (trigger: "riassumi", "riassunto", ecc.) |
 | `config.yaml.example` | Template di configurazione YAML |
 | `scripts/cli.py` | Entry point CLI |
-| `scripts/pipeline.py` | Orchestratore pipeline (extract → chunk → map → reduce → proofread) |
+| `scripts/runner.py` | Esecuzione condivisa: pipeline + render + handoff vision |
+| `scripts/pipeline.py` | Orchestratore pipeline (extract → chunk → map → sintesi → proofread) |
 | `scripts/extractor.py` | Estrattore universale con routing OCR per pagina, cache e handoff vision |
 | `scripts/chunker.py` | Chunking semantico con overlap e checkpoint |
 | `scripts/llm_engine.py` | LLM interaction: map in prosa, merge, sintesi finale, boldify, compressione |

@@ -846,17 +846,21 @@ def _diagnostica_e_estrai_pdf(pdf_path: str, settings, deep_scan: bool = False,
 
 def estrai_metadati(pdf_path: str) -> tuple[str, str]:
     """Read PDF metadata for front matter. Returns (title, author)."""
+    name = Path(pdf_path).name
+    if Path(pdf_path).suffix.lower() != ".pdf":
+        return name, "Autore sconosciuto"
+
     from pypdf import PdfReader
 
     try:
         reader = PdfReader(pdf_path)
         meta = reader.metadata
-        titolo = meta.title if meta and meta.title else os.path.basename(pdf_path)
+        titolo = meta.title if meta and meta.title else name
         autore = meta.author if meta and meta.author else "Autore sconosciuto"
         return titolo, autore
     except Exception as exc:
-        logger.error("Failed to read metadata from {}: {}", pdf_path, exc)
-        return os.path.basename(pdf_path), "Autore sconosciuto"
+        logger.warning("No metadata in {}: {}", Path(pdf_path).name, exc)
+        return name, "Autore sconosciuto"
 
 
 # ---------------------------------------------------------------------------
