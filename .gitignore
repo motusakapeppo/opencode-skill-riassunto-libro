@@ -1,0 +1,21 @@
+# Local configuration (contains the Ollama API key)
+config.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# Agent internals
+.omo/
+
+# Generated artefacts
+.riassunto-cache/
+.vision/
+riassunti/
+Riassunto_*.pdf
+Riassunto_*_entities.json
+ebook-convert-output.txt

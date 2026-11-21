@@ -1,0 +1,43 @@
+# Template — copia in config.yaml (ignorato da git) e inserisci la tua chiave.
+# Ogni chiave puo' essere sovrascritta con la variabile RIASSUNTO_<CHIAVE>.
+
+ollama_host: "https://ollama.com/v1"
+ollama_api_key: ""            # oppure esporta OLLAMA_API_KEY
+
+model_map: "deepseek-v4.1-flash"
+model_reduce: "deepseek-v4.1-flash"
+model_proofread: "deepseek-v4.1-flash"
+
+# Chunking
+chunk_max_tokens: 24000
+chunk_overlap_paragraphs: 2
+chunk_min_tokens: 800
+
+# Output (relativo al file di input se non assoluto)
+output_dir: "riassunti"
+
+# Tool esterni (auto-rilevati se assenti)
+tesseract_path: null          # es. "D:\\tesseract\\tesseract.exe"
+poppler_path: null            # es. "D:\\poppler" (serve solo pdftotext -layout)
+
+# OCR: routing per pagina, batch paralleli, escalation DPI
+ocr_dpi: 200
+ocr_dpi_max: 300
+ocr_workers: 0                # 0 = numero di CPU
+ocr_lang: null                # null = derivato dalla lingua di output (ita/eng)
+ocr_psm: 3
+ocr_preprocess: true
+
+# Cache estrazione (i re-run non rifanno OCR)
+cache_enabled: true
+cache_dir: null               # null = <cartella file>/.riassunto-cache
+
+# Lane vision (pagine che l'OCR non riesce a leggere)
+vision_enabled: true
+vision_first: false           # manda tutto il libro alla vision (doc brevi)
+vision_first_max_pages: 30
+vision_max_pages: 40
+
+playwright_headless: true
+max_retries: 5
+retry_base_delay: 30
